@@ -1,0 +1,253 @@
+From dd31e4862d87a7827f16d818b8a61cf3971ae362 Mon Sep 17 00:00:00 2001
+From: Alan Pearce <alan@alanpearce.eu>
+Date: Mon, 29 Apr 2024 23:08:01 +0200
+Subject: [PATCH] programs.nh: init module
+
+---
+ modules/module-list.nix   |   1 +
+ modules/programs/nh.nix   | 110 ++++++++++++++++++++++++++++++++++++++
+ modules/system/checks.nix |  12 +++++
+ release.nix               |   2 +
+ tests/checks-nh-clean.nix |  20 +++++++
+ tests/programs-nh.nix     |  26 +++++++++
+ 6 files changed, 171 insertions(+)
+ create mode 100644 modules/programs/nh.nix
+ create mode 100644 tests/checks-nh-clean.nix
+ create mode 100644 tests/programs-nh.nix
+
+diff --git a/modules/module-list.nix b/modules/module-list.nix
+index d01bbdb90..c35b9f4ac 100644
+--- a/modules/module-list.nix
++++ b/modules/module-list.nix
+@@ -105,6 +105,7 @@
+   ./programs/gnupg.nix
+   ./programs/man.nix
+   ./programs/info
++  ./programs/nh.nix
+   ./programs/nix-index
+   ./programs/ssh
+   ./programs/tmux.nix
+diff --git a/modules/programs/nh.nix b/modules/programs/nh.nix
+new file mode 100644
+index 000000000..d492fb8d4
+--- /dev/null
++++ b/modules/programs/nh.nix
+@@ -0,0 +1,110 @@
++# Based off: https://github.com/NixOS/nixpkgs/blob/master/nixos/modules/programs/nh.nix
++# When making changes please try to keep it in sync.
++{ config
++, lib
++, pkgs
++, ...
++}:
++
++with lib;
++
++let
++  cfg = config.programs.nh;
++in
++{
++  meta.maintainers = [
++    maintainers.alanpearce or "alanpearce"
++  ];
++
++  imports = [
++    (mkRemovedOptionModule [ "programs" "nh" "clean" "dates" ] "Use `programs.nh.clean.interval` instead.")
++  ];
++
++  options.programs.nh = {
++    enable = mkEnableOption "nh, yet another Nix CLI helper";
++
++    package = mkPackageOption pkgs "nh" { };
++
++    flake = mkOption {
++      type = with types; nullOr (either singleLineStr path);
++      default = null;
++      description = ''
++        The path that will be used for the `NH_FLAKE` environment variable.
++
++        `NH_FLAKE` is used by nh as the default flake for performing actions, like `nh os switch`.
++      '';
++    };
++
++    clean = {
++      enable = mkEnableOption "periodic garbage collection with nh clean all";
++
++      # Not in NixOS module
++      user = mkOption {
++        type = types.nullOr types.str;
++        default = null;
++        description = "User that runs the garbage collector.";
++      };
++
++      interval = mkOption {
++        type = types.attrs;
++        default = { Hour = 3; Minute = 15; };
++        description = ''
++          How often cleanup is performed.
++
++          The format is described in
++          {manpage}`launchd.plist(5)`.
++        '';
++      };
++
++      extraArgs = mkOption {
++        type = types.singleLineStr;
++        default = "";
++        example = "--keep 5 --keep-since 3d";
++        description = ''
++          Options given to {file}`nh` clean when the service is run automatically.
++
++          See {file}`nh clean all --help` for more information.
++        '';
++      };
++    };
++  };
++
++  config = {
++    warnings =
++      if (!(cfg.clean.enable -> !config.nix.gc.automatic)) then [
++        "programs.nh.clean.enable and nix.gc.automatic are both enabled. Please use one or the other to avoid conflict."
++      ] else [ ];
++
++    assertions = [
++      # Not strictly required but probably a good assertion to have
++      {
++        assertion = cfg.clean.enable -> cfg.enable;
++        message = "programs.nh.clean.enable requires programs.nh.enable";
++      }
++
++      {
++        assertion = (cfg.flake != null) -> !(hasSuffix ".nix" cfg.flake);
++        message = "nh.flake must be a directory, not a nix file";
++      }
++    ];
++
++    environment = mkIf cfg.enable {
++      systemPackages = [ cfg.package ];
++      variables = mkIf (cfg.flake != null) {
++        NH_FLAKE = cfg.flake;
++      };
++    };
++
++    launchd = mkIf cfg.clean.enable {
++      daemons.nh-clean = {
++        command = "${getExe cfg.package} clean all ${cfg.clean.extraArgs}";
++        serviceConfig = {
++          RunAtLoad = false;
++          StartCalendarInterval = [ cfg.clean.interval ];
++          UserName = cfg.clean.user;
++        };
++        path = [ config.nix.package ];
++      };
++    };
++  };
++}
+diff --git a/modules/system/checks.nix b/modules/system/checks.nix
+index 47835ace1..95c2bb27a 100644
+--- a/modules/system/checks.nix
++++ b/modules/system/checks.nix
+@@ -195,6 +195,17 @@ let
+     fi
+   '';
+ 
++  nhCleanAll = ''
++    if test -O /nix/store; then
++        echo "[1;31merror: A single-user install can't run nh clean all as root, aborting activation[0m" >&2
++        echo "Configure nh clean all to run as the current user:" >&2
++        echo >&2
++        echo "    programs.nh.clean.user = \"$USER\";" >&2
++        echo >&2
++        exit 2
++    fi
++  '';
++
+   # TODO: Remove this a couple years down the line when we can assume
+   # that anyone who cares about security has upgraded.
+   oldSshAuthorizedKeysDirectory = ''
+@@ -279,6 +290,7 @@ in
+       (mkIf cfg.verifyBuildUsers preSequoiaBuildUsers)
+       (mkIf cfg.verifyBuildUsers buildGroupID)
+       (mkIf config.nix.enable nixDaemon)
++      (mkIf (config.programs.nh.clean.enable && config.programs.nh.clean.user == null) nhCleanAll)
+       nixInstaller
+       (mkIf cfg.verifyNixPath nixPath)
+       oldSshAuthorizedKeysDirectory
+diff --git a/release.nix b/release.nix
+index eaf30044b..077938fd5 100644
+--- a/release.nix
++++ b/release.nix
+@@ -80,6 +80,7 @@ in {
+ 
+   tests.activation-scripts = makeTest ./tests/activation-scripts.nix;
+   tests.autossh = makeTest ./tests/autossh.nix;
++  tests.checks-nh-clean = makeTest ./tests/checks-nh-clean.nix;
+   tests.environment-path = makeTest ./tests/environment-path.nix;
+   tests.environment-terminfo = makeTest ./tests/environment-terminfo.nix;
+   tests.homebrew = makeTest ./tests/homebrew.nix;
+@@ -89,6 +90,7 @@ in {
+   tests.networking-networkservices = makeTest ./tests/networking-networkservices.nix;
+   tests.nix-enable = makeTest ./tests/nix-enable.nix;
+   tests.nixpkgs-overlays = makeTest ./tests/nixpkgs-overlays.nix;
++  tests.programs-nh = makeTest ./tests/programs-nh.nix;
+   tests.programs-ssh = makeTest ./tests/programs-ssh.nix;
+   tests.programs-tmux = makeTest ./tests/programs-tmux.nix;
+   tests.programs-zsh = makeTest ./tests/programs-zsh.nix;
+diff --git a/tests/checks-nh-clean.nix b/tests/checks-nh-clean.nix
+new file mode 100644
+index 000000000..2c7097aa0
+--- /dev/null
++++ b/tests/checks-nh-clean.nix
+@@ -0,0 +1,20 @@
++{ config, pkgs, ... }:
++
++let
++  nh = pkgs.runCommand "nh-0.0.0" { } "mkdir -p $out";
++in
++
++{
++  programs.nh.enable = true;
++  programs.nh.package = nh;
++  programs.nh.clean.enable = true;
++
++  test = ''
++    echo checking nh-clean validation >&2
++    grep "programs.nh.clean.user = " ${config.out}/activate-user
++
++    echo checking nh-clean service in /Library/LaunchDaemons >&2
++    grep "<string>org.nixos.nh-clean</string>" ${config.out}/Library/LaunchDaemons/org.nixos.nh-clean.plist
++    (! grep "<key>UserName</key>" ${config.out}/Library/LaunchDaemons/org.nixos.nh-clean.plist)
++  '';
++}
+diff --git a/tests/programs-nh.nix b/tests/programs-nh.nix
+new file mode 100644
+index 000000000..144909306
+--- /dev/null
++++ b/tests/programs-nh.nix
+@@ -0,0 +1,26 @@
++{ config, pkgs, ... }:
++
++let
++  nh = pkgs.runCommand "nh-0.0.0" { } "mkdir -p $out";
++in
++
++{
++  programs.nh.enable = true;
++  programs.nh.package = nh;
++  programs.nh.clean.enable = true;
++  programs.nh.clean.user = "nixuser";
++  programs.nh.clean.extraArgs = "--keep 5 --keep-since 3d";
++
++  test = ''
++    echo checking nh service in /Library/LaunchDaemons >&2
++    grep "<string>org.nixos.nh-clean</string>" ${config.out}/Library/LaunchDaemons/org.nixos.nh-clean.plist
++    grep "<string>/bin/wait4path /nix/store &amp;&amp; exec ${nh}/bin/nh clean all --keep 5 --keep-since 3d</string>" ${config.out}/Library/LaunchDaemons/org.nixos.nh-clean.plist
++    grep "<key>UserName</key>" ${config.out}/Library/LaunchDaemons/org.nixos.nh-clean.plist
++    grep "<string>nixuser</string>" ${config.out}/Library/LaunchDaemons/org.nixos.nh-clean.plist
++
++    (! grep "<key>KeepAlive</key>" ${config.out}/Library/LaunchDaemons/org.nixos.nh-clean.plist)
++
++    echo checking nh validation >&2
++    (! grep "programs.nh.clean.user = " ${config.out}/activate-user)
++  '';
++}
