@@ -1,0 +1,547 @@
+From 1468f1b17f611f2747f780cf8f442a9aa25002bb Mon Sep 17 00:00:00 2001
+From: Velnbur <kyrylo.baybula@distributedlab.com>
+Date: Tue, 11 Jun 2024 12:22:04 +0300
+Subject: [PATCH 01/15] feat: Add `ollama` service
+
+---
+ modules/services/ollama.nix | 40 +++++++++++++++++++++++++++++++++++++
+ 1 file changed, 40 insertions(+)
+ create mode 100644 modules/services/ollama.nix
+
+diff --git a/modules/services/ollama.nix b/modules/services/ollama.nix
+new file mode 100644
+index 000000000..e192cb4a1
+--- /dev/null
++++ b/modules/services/ollama.nix
+@@ -0,0 +1,40 @@
++{ config, lib, pkgs, ... }:
++
++with lib;
++
++let
++
++  cfg = config.services.ollama;
++
++in {
++  options = {
++    services.ollama = {
++      enable = mkOption {
++        type = types.bool;
++        default = false;
++        description = "Whether to enable the Ollama Daemon.";
++      };
++
++      package = mkOption {
++        type = types.path;
++        default = pkgs.ollama;
++        description = "This option specifies the ollama package to use.";
++      };
++
++      exec = mkOption {
++        type = types.str;
++        default = "ollama";
++        description = "Ollama command/binary to execute.";
++      };
++    };
++  };
++
++  config = mkIf cfg.enable {
++    launchd.user.agents.ollama = {
++      path = [ config.environment.systemPath ];
++      serviceConfig.ProgramArguments =
++        [ "${cfg.package}/bin/${cfg.exec}" "serve" ];
++      serviceConfig.RunAtLoad = true;
++    };
++  };
++}
+
+From 265fe9dc44d3b02f20b6bb946b044b1101b1349f Mon Sep 17 00:00:00 2001
+From: Velnbur <kyrylo.baybula@distributedlab.com>
+Date: Thu, 13 Jun 2024 23:09:27 +0300
+Subject: [PATCH 02/15] Add ollama service to module nix
+
+---
+ modules/module-list.nix | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/modules/module-list.nix b/modules/module-list.nix
+index d01bbdb90..280de6f7b 100644
+--- a/modules/module-list.nix
++++ b/modules/module-list.nix
+@@ -64,6 +64,7 @@
+   ./services/dnsmasq.nix
+   ./services/dnscrypt-proxy.nix
+   ./services/emacs.nix
++  ./services/ollama.nix
+   ./services/eternal-terminal.nix
+   ./services/github-runner
+   ./services/gitlab-runner.nix
+
+From 264c3c2733cbc39553acfd6f04856a8506fb01b8 Mon Sep 17 00:00:00 2001
+From: Velnbur <kyrylo.baybula@distributedlab.com>
+Date: Sun, 16 Jun 2024 11:19:45 +0300
+Subject: [PATCH 03/15] Make `ollama` daemon
+
+---
+ modules/services/ollama.nix | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/modules/services/ollama.nix b/modules/services/ollama.nix
+index e192cb4a1..1ae5d1577 100644
+--- a/modules/services/ollama.nix
++++ b/modules/services/ollama.nix
+@@ -30,7 +30,7 @@ in {
+   };
+ 
+   config = mkIf cfg.enable {
+-    launchd.user.agents.ollama = {
++    launchd.daemons.ollama = {
+       path = [ config.environment.systemPath ];
+       serviceConfig.ProgramArguments =
+         [ "${cfg.package}/bin/${cfg.exec}" "serve" ];
+
+From f48aff0cf9732bef1f1dd5eef909885846cbb63e Mon Sep 17 00:00:00 2001
+From: Velnbur <kyrylo.baybula@distributedlab.com>
+Date: Sun, 16 Jun 2024 11:35:53 +0300
+Subject: [PATCH 04/15] Add `ollama` to system packages
+
+---
+ modules/services/ollama.nix | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/modules/services/ollama.nix b/modules/services/ollama.nix
+index 1ae5d1577..7c98f4a96 100644
+--- a/modules/services/ollama.nix
++++ b/modules/services/ollama.nix
+@@ -30,6 +30,8 @@ in {
+   };
+ 
+   config = mkIf cfg.enable {
++    environment.systemPackages = [ cfg.package ];
++
+     launchd.daemons.ollama = {
+       path = [ config.environment.systemPath ];
+       serviceConfig.ProgramArguments =
+
+From fd28f243996a4af4272e0fc8bfa25b4ade10ce54 Mon Sep 17 00:00:00 2001
+From: Velnbur <kyrylo.baybula@distributedlab.com>
+Date: Sun, 16 Jun 2024 11:21:20 +0300
+Subject: [PATCH 05/15] Add some of the options from NixOS `ollama` module
+
+Particularly: host, port, home, models and environmentVariables, to make
+ollama module compatible with one from nixpkgs.
+
+Except: sandbox, writablePaths, acceleration, openFirewall.
+---
+ modules/services/ollama.nix | 65 ++++++++++++++++++++++++++++++++++---
+ 1 file changed, 60 insertions(+), 5 deletions(-)
+
+diff --git a/modules/services/ollama.nix b/modules/services/ollama.nix
+index 7c98f4a96..04ccef6b9 100644
+--- a/modules/services/ollama.nix
++++ b/modules/services/ollama.nix
+@@ -21,21 +21,76 @@ in {
+         description = "This option specifies the ollama package to use.";
+       };
+ 
+-      exec = mkOption {
++      host = mkOption {
+         type = types.str;
+-        default = "ollama";
+-        description = "Ollama command/binary to execute.";
++        default = "127.0.0.1";
++        example = "0.0.0.0";
++        description = ''
++          The host address which the ollama server HTTP interface listens to.
++        '';
++      };
++
++      port = mkOption {
++        type = types.port;
++        default = 11434;
++        example = 11111;
++        description = ''
++          Which port the ollama server listens to.
++        '';
++      };
++
++      home = lib.mkOption {
++        type = types.str;
++        default = "%S/ollama";
++        example = "/home/foo";
++        description = ''
++          The home directory that the ollama service is started in.
++
++          See also `services.ollama.writablePaths` and `services.ollama.sandbox`.
++        '';
++      };
++
++      models = mkOption {
++        type = types.str;
++        default = "%S/ollama/models";
++        example = "/path/to/ollama/models";
++        description = ''
++          The directory that the ollama service will read models from and download new models to.
++        '';
++      };
++
++      environmentVariables = mkOption {
++        type = types.attrsOf types.str;
++        default = { };
++        example = {
++          OLLAMA_LLM_LIBRARY = "cpu";
++          HIP_VISIBLE_DEVICES = "0,1";
++        };
++        description = ''
++          Set arbitrary environment variables for the ollama service.
++
++          Be aware that these are only seen by the ollama server (launchd daemon),
++          not normal invocations like `ollama run`.
++          Since `ollama run` is mostly a shell around the ollama server, this is usually sufficient.
++        '';
+       };
+     };
+   };
+ 
+   config = mkIf cfg.enable {
++
+     environment.systemPackages = [ cfg.package ];
+ 
+     launchd.daemons.ollama = {
+       path = [ config.environment.systemPath ];
+-      serviceConfig.ProgramArguments =
+-        [ "${cfg.package}/bin/${cfg.exec}" "serve" ];
++
++      environment = cfg.environmentVariables // {
++        HOME = cfg.home;
++        OLLAMA_MODELS = cfg.models;
++        OLLAMA_HOST = "${cfg.host}:${toString cfg.port}";
++      };
++
++      serviceConfig.ProgramArguments = [ "${cfg.package}/bin/ollama" "serve" ];
+       serviceConfig.RunAtLoad = true;
+     };
+   };
+
+From f4ee27e6c6bb35ebe4582ac98f8e7e2cf8fd9ec2 Mon Sep 17 00:00:00 2001
+From: Velnbur <kyrylo.baybula@distributedlab.com>
+Date: Sun, 16 Jun 2024 11:40:47 +0300
+Subject: [PATCH 06/15] Remove unrelated comment in `ollama.home` option
+
+---
+ modules/services/ollama.nix | 2 --
+ 1 file changed, 2 deletions(-)
+
+diff --git a/modules/services/ollama.nix b/modules/services/ollama.nix
+index 04ccef6b9..92ff45ef2 100644
+--- a/modules/services/ollama.nix
++++ b/modules/services/ollama.nix
+@@ -45,8 +45,6 @@ in {
+         example = "/home/foo";
+         description = ''
+           The home directory that the ollama service is started in.
+-
+-          See also `services.ollama.writablePaths` and `services.ollama.sandbox`.
+         '';
+       };
+ 
+
+From 911d16901d82f084662d816d609203168c552d03 Mon Sep 17 00:00:00 2001
+From: Velnbur <kyrylo.baybula@distributedlab.com>
+Date: Mon, 17 Jun 2024 18:04:07 +0300
+Subject: [PATCH 07/15] Revert "Make `ollama` daemon"
+
+This reverts commit 8ad6c8f8b9f5e9be03afee9bffcb6301b2ebe24c.
+---
+ modules/services/ollama.nix | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/modules/services/ollama.nix b/modules/services/ollama.nix
+index 92ff45ef2..76ea4b966 100644
+--- a/modules/services/ollama.nix
++++ b/modules/services/ollama.nix
+@@ -79,7 +79,7 @@ in {
+ 
+     environment.systemPackages = [ cfg.package ];
+ 
+-    launchd.daemons.ollama = {
++    launchd.user.agents.ollama = {
+       path = [ config.environment.systemPath ];
+ 
+       environment = cfg.environmentVariables // {
+
+From 68c74da871fd1b75ca7a288300565cfa90d58b57 Mon Sep 17 00:00:00 2001
+From: Velnbur <kyrylo.baybula@distributedlab.com>
+Date: Mon, 17 Jun 2024 19:34:10 +0300
+Subject: [PATCH 08/15] Change default pathes for `ollama` service
+
+---
+ modules/services/ollama.nix | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/modules/services/ollama.nix b/modules/services/ollama.nix
+index 76ea4b966..b8f77fcbd 100644
+--- a/modules/services/ollama.nix
++++ b/modules/services/ollama.nix
+@@ -41,7 +41,7 @@ in {
+ 
+       home = lib.mkOption {
+         type = types.str;
+-        default = "%S/ollama";
++        default = "$HOME";
+         example = "/home/foo";
+         description = ''
+           The home directory that the ollama service is started in.
+@@ -50,7 +50,7 @@ in {
+ 
+       models = mkOption {
+         type = types.str;
+-        default = "%S/ollama/models";
++        default = "$HOME/.ollama/models";
+         example = "/path/to/ollama/models";
+         description = ''
+           The directory that the ollama service will read models from and download new models to.
+
+From 88135c4121989e6dab66361795a6f0a42d5adbfe Mon Sep 17 00:00:00 2001
+From: Velnbur <kyrylo.baybula@distributedlab.com>
+Date: Mon, 17 Jun 2024 19:34:30 +0300
+Subject: [PATCH 09/15] Update `serviceConfig` for `ollama` service
+
+---
+ modules/services/ollama.nix | 18 +++++++++++-------
+ 1 file changed, 11 insertions(+), 7 deletions(-)
+
+diff --git a/modules/services/ollama.nix b/modules/services/ollama.nix
+index b8f77fcbd..5fb999d4e 100644
+--- a/modules/services/ollama.nix
++++ b/modules/services/ollama.nix
+@@ -82,14 +82,18 @@ in {
+     launchd.user.agents.ollama = {
+       path = [ config.environment.systemPath ];
+ 
+-      environment = cfg.environmentVariables // {
+-        HOME = cfg.home;
+-        OLLAMA_MODELS = cfg.models;
+-        OLLAMA_HOST = "${cfg.host}:${toString cfg.port}";
++      serviceConfig = {
++        KeepAlive = true;
++        RunAtLoad = true;
++        ProcessType = "Background";
++        ProgramArguments = [ "${cfg.package}/bin/ollama" "serve" ];
++
++        EnvironmentVariables = cfg.environmentVariables // {
++          HOME = cfg.home;
++          OLLAMA_MODELS = cfg.models;
++          OLLAMA_HOST = "${cfg.host}:${toString cfg.port}";
++        };
+       };
+-
+-      serviceConfig.ProgramArguments = [ "${cfg.package}/bin/ollama" "serve" ];
+-      serviceConfig.RunAtLoad = true;
+     };
+   };
+ }
+
+From 7b6894806e5bba66319aae14789120e958627ff6 Mon Sep 17 00:00:00 2001
+From: Velnbur <kyrylo.baybula@distributedlab.com>
+Date: Mon, 17 Jun 2024 19:54:07 +0300
+Subject: [PATCH 10/15] Remove ProcessType
+
+---
+ modules/services/ollama.nix | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/modules/services/ollama.nix b/modules/services/ollama.nix
+index 5fb999d4e..260388624 100644
+--- a/modules/services/ollama.nix
++++ b/modules/services/ollama.nix
+@@ -85,7 +85,6 @@ in {
+       serviceConfig = {
+         KeepAlive = true;
+         RunAtLoad = true;
+-        ProcessType = "Background";
+         ProgramArguments = [ "${cfg.package}/bin/ollama" "serve" ];
+ 
+         EnvironmentVariables = cfg.environmentVariables // {
+
+From eb6afc46276e792bdd168b74f5f5e87d630014c7 Mon Sep 17 00:00:00 2001
+From: Velnbur <kyrylo.baybula@distributedlab.com>
+Date: Mon, 17 Jun 2024 20:27:26 +0300
+Subject: [PATCH 11/15] Add log file option to `ollama` service
+
+---
+ modules/services/ollama.nix | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/modules/services/ollama.nix b/modules/services/ollama.nix
+index 260388624..24e9c0350 100644
+--- a/modules/services/ollama.nix
++++ b/modules/services/ollama.nix
+@@ -72,6 +72,16 @@ in {
+           Since `ollama run` is mostly a shell around the ollama server, this is usually sufficient.
+         '';
+       };
++
++      logFile = mkOption {
++        type = types.nullOr types.path;
++        default = null;
++        example = "/var/tmp/ollama.log";
++        description = ''
++          The file to write the ollama server logs to.
++          If not set, logs are written to stdout.
++        '';
++      };
+     };
+   };
+ 
+@@ -87,6 +97,9 @@ in {
+         RunAtLoad = true;
+         ProgramArguments = [ "${cfg.package}/bin/ollama" "serve" ];
+ 
++        StandardOutPath = cfg.logFile;
++        StandardErrorPath = cfg.logFile;
++
+         EnvironmentVariables = cfg.environmentVariables // {
+           HOME = cfg.home;
+           OLLAMA_MODELS = cfg.models;
+
+From 2c36d4c240bfc4593aefdccc058adbef3f6ddc49 Mon Sep 17 00:00:00 2001
+From: Velnbur <kyrylo.baybula@distributedlab.com>
+Date: Thu, 20 Jun 2024 21:15:41 +0300
+Subject: [PATCH 12/15] Revert "Add log file option to `ollama` service"
+
+This reverts commit 585e30161339e5a4fbda8b021efd71c66728951e.
+---
+ modules/services/ollama.nix | 13 -------------
+ 1 file changed, 13 deletions(-)
+
+diff --git a/modules/services/ollama.nix b/modules/services/ollama.nix
+index 24e9c0350..260388624 100644
+--- a/modules/services/ollama.nix
++++ b/modules/services/ollama.nix
+@@ -72,16 +72,6 @@ in {
+           Since `ollama run` is mostly a shell around the ollama server, this is usually sufficient.
+         '';
+       };
+-
+-      logFile = mkOption {
+-        type = types.nullOr types.path;
+-        default = null;
+-        example = "/var/tmp/ollama.log";
+-        description = ''
+-          The file to write the ollama server logs to.
+-          If not set, logs are written to stdout.
+-        '';
+-      };
+     };
+   };
+ 
+@@ -97,9 +87,6 @@ in {
+         RunAtLoad = true;
+         ProgramArguments = [ "${cfg.package}/bin/ollama" "serve" ];
+ 
+-        StandardOutPath = cfg.logFile;
+-        StandardErrorPath = cfg.logFile;
+-
+         EnvironmentVariables = cfg.environmentVariables // {
+           HOME = cfg.home;
+           OLLAMA_MODELS = cfg.models;
+
+From e23f7f2862c53ca7c0491164d6691dcf34119494 Mon Sep 17 00:00:00 2001
+From: Velnbur <kyrylo.baybula@distributedlab.com>
+Date: Thu, 27 Jun 2024 20:27:25 +0300
+Subject: [PATCH 13/15] Remove "home" option
+
+---
+ modules/services/ollama.nix | 10 ----------
+ 1 file changed, 10 deletions(-)
+
+diff --git a/modules/services/ollama.nix b/modules/services/ollama.nix
+index 260388624..b2a5c2706 100644
+--- a/modules/services/ollama.nix
++++ b/modules/services/ollama.nix
+@@ -39,15 +39,6 @@ in {
+         '';
+       };
+ 
+-      home = lib.mkOption {
+-        type = types.str;
+-        default = "$HOME";
+-        example = "/home/foo";
+-        description = ''
+-          The home directory that the ollama service is started in.
+-        '';
+-      };
+-
+       models = mkOption {
+         type = types.str;
+         default = "$HOME/.ollama/models";
+@@ -88,7 +79,6 @@ in {
+         ProgramArguments = [ "${cfg.package}/bin/ollama" "serve" ];
+ 
+         EnvironmentVariables = cfg.environmentVariables // {
+-          HOME = cfg.home;
+           OLLAMA_MODELS = cfg.models;
+           OLLAMA_HOST = "${cfg.host}:${toString cfg.port}";
+         };
+
+From c06050e3d448b18a99ab8f987e8621401828927e Mon Sep 17 00:00:00 2001
+From: Velnbur <kyrylo.baybula@distributedlab.com>
+Date: Fri, 28 Jun 2024 11:22:45 +0300
+Subject: [PATCH 14/15] Set `models` as `null` by default
+
+---
+ modules/services/ollama.nix | 9 +++++----
+ 1 file changed, 5 insertions(+), 4 deletions(-)
+
+diff --git a/modules/services/ollama.nix b/modules/services/ollama.nix
+index b2a5c2706..c49944eb4 100644
+--- a/modules/services/ollama.nix
++++ b/modules/services/ollama.nix
+@@ -40,8 +40,8 @@ in {
+       };
+ 
+       models = mkOption {
+-        type = types.str;
+-        default = "$HOME/.ollama/models";
++        type = types.nullOr types.str;
++        default = null;
+         example = "/path/to/ollama/models";
+         description = ''
+           The directory that the ollama service will read models from and download new models to.
+@@ -79,9 +79,10 @@ in {
+         ProgramArguments = [ "${cfg.package}/bin/ollama" "serve" ];
+ 
+         EnvironmentVariables = cfg.environmentVariables // {
+-          OLLAMA_MODELS = cfg.models;
+           OLLAMA_HOST = "${cfg.host}:${toString cfg.port}";
+-        };
++        } // (optionalAttrs (cfg.models != null) {
++          OLLAMA_MODELS = cfg.models;
++        });
+       };
+     };
+   };
+
+From e03b66f003875a484549ae77eaaf088172d1135b Mon Sep 17 00:00:00 2001
+From: Velnbur <kyrylo.baybula@distributedlab.com>
+Date: Fri, 28 Jun 2024 12:18:04 +0300
+Subject: [PATCH 15/15] Add `meta.maintainers` to ollama service
+
+---
+ modules/services/ollama.nix | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/modules/services/ollama.nix b/modules/services/ollama.nix
+index c49944eb4..8bf77bc35 100644
+--- a/modules/services/ollama.nix
++++ b/modules/services/ollama.nix
+@@ -7,6 +7,8 @@ let
+   cfg = config.services.ollama;
+ 
+ in {
++  meta.maintainers = [ "velnbur" ];
++
+   options = {
+     services.ollama = {
+       enable = mkOption {
