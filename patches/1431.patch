@@ -1,0 +1,276 @@
+From 919703cb1d773483db13b92f190af635e2db4b39 Mon Sep 17 00:00:00 2001
+From: ed9w2in6 <22890124+ed9w2in6@users.noreply.github.com>
+Date: Thu, 1 May 2025 18:07:41 +0800
+Subject: [PATCH 1/3] feat: make persistent-others similar to the new
+ persistent-apps
+
+This is backward compatible via convertion function provided for
+coercedTo.
+
+Fixes: #968, #982, #1398
+---
+ modules/system/defaults/dock.nix | 90 +++++++++++++++++++++++++++++---
+ 1 file changed, 83 insertions(+), 7 deletions(-)
+
+diff --git a/modules/system/defaults/dock.nix b/modules/system/defaults/dock.nix
+index d88b6afa9..5ce7f7cb5 100644
+--- a/modules/system/defaults/dock.nix
++++ b/modules/system/defaults/dock.nix
+@@ -197,16 +197,92 @@ in {
+     };
+ 
+     system.defaults.dock.persistent-others = mkOption {
+-      type = types.nullOr (types.listOf (types.either types.path types.str));
++      type = let
++        folderType = types.submodule {
++          options.path = mkOption {
++            description = "Path to a folder to be added to the dock.";
++            type = types.str;
++          };
++          options.arrangement = mkOption {
++            description = "Sort order for files in folder when clicked.";
++            type = types.enum ["name" "date-added" "date-modified" "date-created" "kind"];
++            default = "name";
++          };
++          options.displayas = mkOption {
++            description = "How to display the folder before clicked.  stack: Stack of file previews.  folder: A folder icon";
++            type = types.enum ["stack" "folder"];
++            default = "stack";
++          };
++          options.showas = mkOption {
++            description = "Effect to show files when clicked.  fan: fan-out effect, grid: box, list: list";
++            type = types.enum ["automatic" "fan" "grid" "list"];
++            default = "automatic";
++          };
++        };
++        taggedType = types.attrTag {
++          file = mkOption {
++            description = "A file to be added to the dock.";
++            type = types.str;
++          };
++          folder = mkOption {
++            description = "A folder to be added to the dock.";
++            type = types.coercedTo types.str (str: { path = str; }) folderType;
++          };
++        };
++        simpleType = types.either types.str types.path;
++        # Below to NOT break exisiting config
++        toTagged = _path: let path = builtins.toString _path; in if strings.hasInfix "." (last (splitString "/" path)) then { file = path; } else { folder = path; };
++        # toTagged = path: { folder = path; }; # or this to be consistent with persistent-apps
++      in
++        types.nullOr (types.listOf (types.coercedTo simpleType toTagged taggedType));
+       default = null;
+-      example = [ "~/Documents" "~/Downloads" ];
++      example = [
++        ./flake.nix
++        "/Volumes"
++        { folder = "/Users/@username@/Downloads"; }
++        { folder = { path = "/Users/@username@/.emacs.d"; showas = "grid"; }; }
++        { file = "/Users/@username@/Desktop/this_is_a_file"; }
++      ];
+       description = ''
+-        Persistent folders in the dock.
++        Persistent files, and folders in the dock.
+       '';
+-      apply = value:
+-        if !(isList value)
+-        then value
+-        else map (folder: { tile-data = { file-data = { _CFURLString = "file://" + folder; _CFURLStringType = 15; }; }; tile-type = if strings.hasInfix "." (last (splitString "/" folder)) then "file-tile" else "directory-tile"; }) value;
++      apply = let
++        arrangementMap = {
++          name          = 1;
++          date-added    = 2;
++          date-modified = 3;
++          date-created  = 4;
++          kind          = 5;
++        };
++        displayasMap = {
++          stack  = 0;
++          folder = 1;
++        };
++        showasMap = {
++          automatic = 0;
++          fan       = 1;
++          grid      = 2;
++          list      = 3;
++        };
++        parseFolder = (folder:
++          builtins.mapAttrs (name: val:
++            if name == "arrangement" then arrangementMap.${val}
++            else if name == "displayas" then displayasMap.${val}
++            else if name == "showas" then showasMap.${val}
++            else val
++          ) folder
++        );
++        toTile = item: {
++          tile-data = {
++            file-data = {
++              _CFURLString = "file://" + (if item ? folder then item.folder.path else item.file);
++              _CFURLStringType = 15;
++            };
++          } // (if item ? folder then {inherit (parseFolder item.folder) arrangement displayas showas;} else {});
++          tile-type = if item ? folder then "directory-tile" else "file-tile";
++        };
++      in
++        value: if value == null then null else map toTile value;
+     };
+ 
+     system.defaults.dock.scroll-to-open = mkOption {
+
+From a9d4143363393de6ce0ce189b95659372f61f14b Mon Sep 17 00:00:00 2001
+From: ed9w2in6 <22890124+ed9w2in6@users.noreply.github.com>
+Date: Thu, 1 May 2025 19:00:58 +0800
+Subject: [PATCH 2/3] fix: prevent example of persistent-others from evaluating
+
+---
+ modules/system/defaults/dock.nix | 7 ++++---
+ 1 file changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/modules/system/defaults/dock.nix b/modules/system/defaults/dock.nix
+index 5ce7f7cb5..31d2f52a8 100644
+--- a/modules/system/defaults/dock.nix
++++ b/modules/system/defaults/dock.nix
+@@ -236,13 +236,14 @@ in {
+       in
+         types.nullOr (types.listOf (types.coercedTo simpleType toTagged taggedType));
+       default = null;
+-      example = [
++      example = lib.literalExpression ''
++      [
+         ./flake.nix
+         "/Volumes"
+         { folder = "/Users/@username@/Downloads"; }
+         { folder = { path = "/Users/@username@/.emacs.d"; showas = "grid"; }; }
+-        { file = "/Users/@username@/Desktop/this_is_a_file"; }
+-      ];
++        { file = "/Users/@username@/Desktop/this_is_a_file"; }      
++      ]'';
+       description = ''
+         Persistent files, and folders in the dock.
+       '';
+
+From 392c449a309b24928e00892267ee0f41783c2f75 Mon Sep 17 00:00:00 2001
+From: ed9w2in6 <22890124+ed9w2in6@users.noreply.github.com>
+Date: Thu, 1 May 2025 22:24:49 +0800
+Subject: [PATCH 3/3] fix: add test cases and expected output
+
+---
+ .../system-defaults-write/activate-user.txt   | 64 ++++++++++++++++++-
+ tests/system-defaults-write.nix               |  9 ++-
+ 2 files changed, 70 insertions(+), 3 deletions(-)
+
+diff --git a/tests/fixtures/system-defaults-write/activate-user.txt b/tests/fixtures/system-defaults-write/activate-user.txt
+index d93321ef5..b50dd5823 100644
+--- a/tests/fixtures/system-defaults-write/activate-user.txt
++++ b/tests/fixtures/system-defaults-write/activate-user.txt
+@@ -326,13 +326,19 @@ defaults write com.apple.dock 'persistent-others' $'<?xml version="1.0" encoding
+ 	<dict>
+ 		<key>tile-data</key>
+ 		<dict>
++			<key>arrangement</key>
++			<integer>1</integer>
++			<key>displayas</key>
++			<integer>0</integer>
+ 			<key>file-data</key>
+ 			<dict>
+ 				<key>_CFURLString</key>
+-				<string>file://~/Documents</string>
++				<string>file:///file</string>
+ 				<key>_CFURLStringType</key>
+ 				<integer>15</integer>
+ 			</dict>
++			<key>showas</key>
++			<integer>0</integer>
+ 		</dict>
+ 		<key>tile-type</key>
+ 		<string>directory-tile</string>
+@@ -343,7 +349,7 @@ defaults write com.apple.dock 'persistent-others' $'<?xml version="1.0" encoding
+ 			<key>file-data</key>
+ 			<dict>
+ 				<key>_CFURLString</key>
+-				<string>file://~/Downloads/file.txt</string>
++				<string>file:///file</string>
+ 				<key>_CFURLStringType</key>
+ 				<integer>15</integer>
+ 			</dict>
+@@ -351,6 +357,60 @@ defaults write com.apple.dock 'persistent-others' $'<?xml version="1.0" encoding
+ 		<key>tile-type</key>
+ 		<string>file-tile</string>
+ 	</dict>
++	<dict>
++		<key>tile-data</key>
++		<dict>
++			<key>file-data</key>
++			<dict>
++				<key>_CFURLString</key>
++				<string>file:///folder.d</string>
++				<key>_CFURLStringType</key>
++				<integer>15</integer>
++			</dict>
++		</dict>
++		<key>tile-type</key>
++		<string>file-tile</string>
++	</dict>
++	<dict>
++		<key>tile-data</key>
++		<dict>
++			<key>arrangement</key>
++			<integer>5</integer>
++			<key>displayas</key>
++			<integer>1</integer>
++			<key>file-data</key>
++			<dict>
++				<key>_CFURLString</key>
++				<string>file:///folder.d</string>
++				<key>_CFURLStringType</key>
++				<integer>15</integer>
++			</dict>
++			<key>showas</key>
++			<integer>2</integer>
++		</dict>
++		<key>tile-type</key>
++		<string>directory-tile</string>
++	</dict>
++	<dict>
++		<key>tile-data</key>
++		<dict>
++			<key>arrangement</key>
++			<integer>1</integer>
++			<key>displayas</key>
++			<integer>0</integer>
++			<key>file-data</key>
++			<dict>
++				<key>_CFURLString</key>
++				<string>file:///folder</string>
++				<key>_CFURLStringType</key>
++				<integer>15</integer>
++			</dict>
++			<key>showas</key>
++			<integer>0</integer>
++		</dict>
++		<key>tile-type</key>
++		<string>directory-tile</string>
++	</dict>
+ </array>
+ </plist>'
+ defaults write com.apple.dock 'scroll-to-open' $'<?xml version="1.0" encoding="UTF-8"?>
+diff --git a/tests/system-defaults-write.nix b/tests/system-defaults-write.nix
+index 35ff85322..0a76e8265 100644
+--- a/tests/system-defaults-write.nix
++++ b/tests/system-defaults-write.nix
+@@ -77,7 +77,14 @@
+     { folder = "/Applications/Utilities"; }
+     { file = "/Users/example/Downloads/test.csv"; }
+   ];
+-  system.defaults.dock.persistent-others = ["~/Documents" "~/Downloads/file.txt"];
++  system.defaults.dock.persistent-others = [
++    # ./. # TODO: how to test for paths while NOT being brittle?
++    "/file"
++    { file = "/file"; }
++    "/folder.d"
++    { folder = { path = "/folder.d"; arrangement="kind"; displayas="folder"; showas = "grid"; }; }
++    { folder = "/folder"; }
++  ];
+   system.defaults.dock.scroll-to-open = false;
+   system.defaults.finder.AppleShowAllFiles = true;
+   system.defaults.finder.ShowStatusBar = true;
