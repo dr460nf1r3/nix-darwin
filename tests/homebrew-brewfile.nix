@@ -17,6 +17,8 @@ in
 {
   homebrew.enable = true;
 
+  homebrew.user = "test-homebrew-user";
+
   # Examples taken from https://github.com/Homebrew/homebrew-bundle
   homebrew.taps = [
     "homebrew/cask"

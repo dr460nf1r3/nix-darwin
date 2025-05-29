@@ -31,12 +31,15 @@ in
         [ -L "$1" ] && [ "''${link#*-}" = 'system-applications/Applications' ]
       }
 
-      # Clean up for links created at the old location in HOME
-      if ourLink ~/Applications; then
-        rm ~/Applications
-      elif ourLink ~/Applications/'Nix Apps'; then
-        rm ~/Applications/'Nix Apps'
-      fi
+      ${lib.optionalString (config.system.primaryUser != null) ''
+        # Clean up for links created at the old location in HOME
+        # TODO: Remove this in 25.11.
+        if ourLink ~${config.system.primaryUser}/Applications; then
+          rm ~${config.system.primaryUser}/Applications
+        elif ourLink ~${config.system.primaryUser}/Applications/'Nix Apps'; then
+          rm ~${config.system.primaryUser}/Applications/'Nix Apps'
+        fi
+      ''}
 
       targetFolder='/Applications/Nix Apps'
 
