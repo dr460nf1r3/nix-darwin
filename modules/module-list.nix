@@ -115,7 +115,7 @@
   ./programs/info
   ./programs/nh.nix
   ./programs/nix-index
-  ./programs/ssh
+  ./programs/ssh.nix
   ./programs/tmux.nix
   ./programs/vim.nix
   ./programs/zsh
