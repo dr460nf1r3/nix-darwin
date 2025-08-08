@@ -1,62 +1,62 @@
-From 319c5a4b5b7f2562f30b777310c4f31b76053896 Mon Sep 17 00:00:00 2001
+From 21d733a51f0b4f4b650da3dcf501d7b2c546a245 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?=E2=80=AErekc=C3=A4H=20nitraM=E2=80=AE?=
  <spamfaenger@gmx.de>
 Date: Sat, 22 Mar 2025 14:05:41 +0100
-Subject: [PATCH 1/3] Switch to modern nix formatting
+Subject: [PATCH 1/3] applications: reformat
 
 ---
- modules/system/applications.nix | 7 ++++++-
- 1 file changed, 6 insertions(+), 1 deletion(-)
+ modules/system/applications.nix | 22 +++++++---------------
+ 1 file changed, 7 insertions(+), 15 deletions(-)
 
 diff --git a/modules/system/applications.nix b/modules/system/applications.nix
-index 9dd876657..041cb2cb3 100644
+index a2277c7a0..2b560834d 100644
 --- a/modules/system/applications.nix
 +++ b/modules/system/applications.nix
-@@ -1,4 +1,9 @@
+@@ -1,19 +1,12 @@
 -{ config, lib, pkgs, ... }:
-+{
+-
+-with lib;
+-
+-let
+-
+-  cfg = config.system;
+-
+-in
+-
+ {
+-  options = {
+-  };
 +  config,
 +  lib,
 +  pkgs,
 +  ...
 +}:
  
- with lib;
- 
-
-From 26ac636ec8d694cfffb03c3eadcb7ac9a796da30 Mon Sep 17 00:00:00 2001
-From: =?UTF-8?q?=E2=80=AErekc=C3=A4H=20nitraM=E2=80=AE?=
- <spamfaenger@gmx.de>
-Date: Sat, 22 Mar 2025 17:49:53 +0100
-Subject: [PATCH 2/3] Remove unused with statement
-
----
- modules/system/applications.nix | 4 ----
- 1 file changed, 4 deletions(-)
-
-diff --git a/modules/system/applications.nix b/modules/system/applications.nix
-index 041cb2cb3..3cd60c6df 100644
---- a/modules/system/applications.nix
-+++ b/modules/system/applications.nix
-@@ -5,12 +5,8 @@
-   ...
- }:
- 
--with lib;
++{
+   config = {
 -
- let
--
-   cfg = config.system;
--
- in
+     system.build.applications = pkgs.buildEnv {
+       name = "system-applications";
+       paths = config.environment.systemPackages;
+@@ -42,11 +35,10 @@ in
  
- {
+       if [ ! -e '/Applications/Nix Apps' ] \
+          || ourLink '/Applications/Nix Apps'; then
+-        ln -sfn ${cfg.build.applications}/Applications '/Applications/Nix Apps'
++        ln -sfn ${config.system.build.applications}/Applications '/Applications/Nix Apps'
+       else
+         echo "warning: /Applications/Nix Apps is not owned by nix-darwin, skipping App linking..." >&2
+       fi
+     '';
+-
+   };
+ }
 
-From 1a8be22860dcd3313ccdd9688405d361af9c1a56 Mon Sep 17 00:00:00 2001
+From 1f9cca7781b18a073c45823a24e9bd74eb83d3fe Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?=E2=80=AErekc=C3=A4H=20nitraM=E2=80=AE?=
  <spamfaenger@gmx.de>
 Date: Sat, 22 Mar 2025 14:20:10 +0100
-Subject: [PATCH 3/3] Copy applications instead of linking them to make macOS
+Subject: [PATCH 2/3] Copy applications instead of linking them to make macOS
  happy
 
 All existing attempts fell short.
@@ -88,16 +88,16 @@ Which all leads us back to Don Copine and Pastone. *sigh*
  1 file changed, 26 insertions(+), 5 deletions(-)
 
 diff --git a/modules/system/applications.nix b/modules/system/applications.nix
-index 3cd60c6df..84be7ba31 100644
+index 2b560834d..a06a25fbf 100644
 --- a/modules/system/applications.nix
 +++ b/modules/system/applications.nix
-@@ -38,12 +38,33 @@ in
-         rm ~/Applications/'Nix Apps'
-       fi
+@@ -33,12 +33,33 @@
+         fi
+       ''}
  
 -      if [ ! -e '/Applications/Nix Apps' ] \
 -         || ourLink '/Applications/Nix Apps'; then
--        ln -sfn ${cfg.build.applications}/Applications '/Applications/Nix Apps'
+-        ln -sfn ${config.system.build.applications}/Applications '/Applications/Nix Apps'
 -      else
 -        echo "warning: /Applications/Nix Apps is not owned by nix-darwin, skipping App linking..." >&2
 +      targetFolder='/Applications/Nix Apps'
@@ -126,7 +126,78 @@ index 3cd60c6df..84be7ba31 100644
 +        --no-owner
 +      )
 +
-+      ${lib.getExe pkgs.rsync} "''${rsyncFlags[@]}" ${cfg.build.applications}/Applications/ "$targetFolder"
++      ${lib.getExe pkgs.rsync} "''${rsyncFlags[@]}" ${config.system.build.applications}/Applications/ "$targetFolder"
      '';
- 
    };
+ }
+
+From be2d7d653567f49223d4d675e4a7d268a6ce90ba Mon Sep 17 00:00:00 2001
+From: Michael Hoang <enzime@users.noreply.github.com>
+Date: Sat, 21 Jun 2025 14:47:48 +0700
+Subject: [PATCH 3/3] applications: ensure sufficient permissions before
+ updating apps
+
+---
+ modules/system/applications.nix | 49 +++++++++++++++++++++++++++++++++
+ 1 file changed, 49 insertions(+)
+
+diff --git a/modules/system/applications.nix b/modules/system/applications.nix
+index a06a25fbf..603f96011 100644
+--- a/modules/system/applications.nix
++++ b/modules/system/applications.nix
+@@ -7,6 +7,55 @@
+ 
+ {
+   config = {
++    system.checks.text = lib.mkAfter ''
++      ensureAppManagement() {
++        for appBundle in /Applications/Nix\ Apps/*.app; do
++          if [[ -d "$appBundle" ]]; then
++            if ! touch "$appBundle/.DS_Store" &> /dev/null; then
++              return 1
++            fi
++          fi
++        done
++
++        return 0
++      }
++
++      if ! ensureAppManagement; then
++        if [[ "$(launchctl managername)" != Aqua ]]; then
++          # It is possible to grant the App Management permission to `sshd-keygen-wrapper`, however
++          # there are many pitfalls like requiring the primary user to grant the permission and to
++          # be logged in when `darwin-rebuild` is run over SSH and it will still fail sometimes...
++          printf >&2 '\e[1;31merror: permission denied when trying to update apps over SSH, aborting activation\e[0m\n'
++          printf >&2 'Apps could not be updated as `darwin-rebuild` requires Full Disk Access to work over SSH.\n'
++          printf >&2 'You can either:\n'
++          printf >&2 '\n'
++          printf >&2 '  grant Full Disk Access to all programs run over SSH\n'
++          printf >&2 '\n'
++          printf >&2 'or\n'
++          printf >&2 '\n'
++          printf >&2 '  run `darwin-rebuild` in a graphical session.\n'
++          printf >&2 '\n'
++          printf >&2 'The option "Allow full disk access for remote users" can be found by\n'
++          printf >&2 'navigating to System Settings > General > Sharing > Remote Login\n'
++          printf >&2 'and then pressing on the i icon next to the switch.\n'
++          exit 1
++        else
++          # The TCC service required to modify notarised app bundles is `kTCCServiceSystemPolicyAppBundles`
++          # and we can reset it to ensure the user gets another prompt
++          tccutil reset SystemPolicyAppBundles > /dev/null
++
++          if ! ensureAppManagement; then
++            printf >&2 '\e[1;31merror: permission denied when trying to update apps, aborting activation\e[0m\n'
++            printf >&2 '`darwin-rebuild` requires permission to update your apps, please accept the notification\n'
++            printf >&2 'and grant the permission for your terminal emulator in System Settings.\n'
++            printf >&2 '\n'
++            printf >&2 'If you did not get a notification, you can navigate to System Settings > Privacy & Security > App Management.\n'
++            exit 1
++          fi
++        fi
++      fi
++    '';
++
+     system.build.applications = pkgs.buildEnv {
+       name = "system-applications";
+       paths = config.environment.systemPackages;
